@@ -53,17 +53,17 @@ export default function TabsLayout() {
         }}
       />
       <Tabs.Screen
-        name="chat"
+        name="chat/index"
         options={{
           title: "Chat",
-          tabBarIcon: ({ focused }) => <TabIcon glyph="💬" focused={focused} />,
+          tabBarIcon: ({ focused }) => <TabIcon glyph="◷" focused={focused} />,
         }}
       />
       <Tabs.Screen
-        name="profile"
+        name="profile/index"
         options={{
           title: "Profile",
-          tabBarIcon: ({ focused }) => <TabIcon glyph="👤" focused={focused} />,
+          tabBarIcon: ({ focused }) => <TabIcon glyph="◉" focused={focused} />,
         }}
       />
       <Tabs.Screen name="index" options={{ href: null }} />

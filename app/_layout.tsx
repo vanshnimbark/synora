@@ -9,10 +9,12 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 
 import { Colors } from "@/constants/theme";
 import { supabase } from "../lib/supabase";
+import { installWebAlertShim } from "../lib/webAlert";
 import { useAuthStore } from "@/store/authStore";
 import type { User } from "@/types/database";
 
 void SplashScreen.preventAutoHideAsync();
+installWebAlertShim();
 
 export default function RootLayout() {
   const queryClient = useMemo(() => new QueryClient(), []);

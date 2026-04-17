@@ -19,18 +19,15 @@ type VerifyStep = "phone" | "otp";
 
 // --- Mock OTP Flow ----------------------------------------------------
 // We accept any 10-digit phone and any 6-digit code. Under the hood we
-// sign the user into Supabase with a deterministic email/password derived
-// from the phone so we get a real session for RLS + realtime to work.
+// call our backend which provisions a confirmed Supabase user server-side
+// using the service-role key, then we sign in from the client.
 // Swap to `supabase.auth.signInWithOtp` (SMS) once Twilio is configured.
 const MOCK_OTP_FALLBACK = "123456";
 
-function phoneToEmail(phone: string): string {
-  return `${phone}@synora.mock`;
-}
-function phoneToPassword(phone: string): string {
-  // Deterministic so the same phone always yields the same credentials.
-  return `Synora!${phone}#mvp`;
-}
+// Backend base URL — in Expo web, hosted on same origin; in native, use full URL.
+const BACKEND_URL =
+  process.env.EXPO_PUBLIC_BACKEND_URL ??
+  (typeof window !== "undefined" ? window.location.origin : "");
 
 export default function VerifyScreen() {
   const router = useRouter();
@@ -67,38 +64,30 @@ export default function VerifyScreen() {
     try {
       setLoading(true);
 
-      const email = phoneToEmail(phone);
-      const password = phoneToPassword(phone);
+      // 1) Ask backend to provision / confirm the mock user for this phone
+      const provisionRes = await fetch(`${BACKEND_URL}/api/auth/mock-otp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone, otp: trimmed }),
+      });
+      if (!provisionRes.ok) {
+        const errText = await provisionRes.text();
+        throw new Error(
+          `Mock OTP provision failed (${provisionRes.status}): ${errText.slice(0, 160)}`,
+        );
+      }
+      const { email, password } = (await provisionRes.json()) as {
+        email: string;
+        password: string;
+      };
 
-      // Try sign in; if user doesn't exist, sign up.
-      let signInRes = await supabase.auth.signInWithPassword({ email, password });
-
+      // 2) Sign in with the deterministic credentials
+      const signInRes = await supabase.auth.signInWithPassword({ email, password });
       if (signInRes.error || !signInRes.data.session) {
-        const signUpRes = await supabase.auth.signUp({
-          email,
-          password,
-          options: {
-            data: { phone: `+91${phone}` },
-          },
-        });
-        if (signUpRes.error) {
-          throw signUpRes.error;
-        }
-        // If email confirmation is enforced, there's no session yet — try sign-in again.
-        if (!signUpRes.data.session) {
-          const retry = await supabase.auth.signInWithPassword({ email, password });
-          if (retry.error || !retry.data.session) {
-            throw new Error(
-              "Could not establish a session. Disable email confirmations in Supabase → Auth → Providers.",
-            );
-          }
-          signInRes = retry;
-        } else {
-          signInRes = { data: signUpRes.data, error: null } as typeof signInRes;
-        }
+        throw signInRes.error ?? new Error("Could not establish a session.");
       }
 
-      const session = signInRes.data.session!;
+      const session = signInRes.data.session;
       const authUserId = session.user.id;
       setSession(session);
 

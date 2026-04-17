@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Platform, Pressable, StyleSheet, Text, View, useWindowDimensions } from "react-native";
 import { Slot, useRouter, useSegments } from "expo-router";
 import * as SplashScreen from "expo-splash-screen";
 import * as Notifications from "expo-notifications";
@@ -159,34 +159,75 @@ export default function RootLayout() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <View style={{ flex: 1, backgroundColor: Colors.void }}>
-        {user?.is_invisible ? (
-          <Pressable
-            style={{
-              backgroundColor: Colors.ash,
-              paddingHorizontal: 12,
-              paddingVertical: 8,
-              borderBottomWidth: 1,
-              borderBottomColor: Colors.mist,
-            }}
-            onPress={async () => {
-              if (!user.id) {
-                return;
-              }
-              await supabase
-                .from("users")
-                .update({ is_invisible: false } as never)
-                .eq("id", user.id);
-              setUser({ ...user, is_invisible: false });
-            }}
-          >
-            <Text style={{ color: Colors.fog, fontSize: 13 }}>
-              👁 You&apos;re invisible · Tap to reappear
-            </Text>
-          </Pressable>
-        ) : null}
-        <Slot />
-      </View>
+      <MobileFrame>
+        <View style={{ flex: 1, backgroundColor: Colors.void }}>
+          {user?.is_invisible ? (
+            <Pressable
+              style={{
+                backgroundColor: Colors.ash,
+                paddingHorizontal: 12,
+                paddingVertical: 8,
+                borderBottomWidth: 1,
+                borderBottomColor: Colors.mist,
+              }}
+              onPress={async () => {
+                if (!user.id) {
+                  return;
+                }
+                await supabase
+                  .from("users")
+                  .update({ is_invisible: false } as never)
+                  .eq("id", user.id);
+                setUser({ ...user, is_invisible: false });
+              }}
+            >
+              <Text style={{ color: Colors.fog, fontSize: 13 }}>
+                You&apos;re invisible · Tap to reappear
+              </Text>
+            </Pressable>
+          ) : null}
+          <Slot />
+        </View>
+      </MobileFrame>
     </QueryClientProvider>
   );
 }
+
+/**
+ * On web + wide viewports, constrain app width to a mobile frame
+ * (420 × 900) centered on a dim backdrop. On native (iOS/Android) or
+ * narrow viewports, this is a no-op.
+ */
+function MobileFrame({ children }: { children: React.ReactNode }) {
+  const { width } = useWindowDimensions();
+  if (Platform.OS !== "web" || width <= 640) {
+    return <View style={{ flex: 1, backgroundColor: Colors.void }}>{children}</View>;
+  }
+  return (
+    <View style={styles.webBackdrop}>
+      <View style={styles.webFrame}>{children}</View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  webBackdrop: {
+    flex: 1,
+    backgroundColor: "#050309",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  webFrame: {
+    width: 420,
+    height: "100%",
+    maxHeight: 900,
+    backgroundColor: Colors.void,
+    borderRadius: 28,
+    overflow: "hidden",
+    borderWidth: 1,
+    borderColor: "#1A1728",
+    shadowColor: "#000",
+    shadowOpacity: 0.6,
+    shadowRadius: 40,
+  },
+});

@@ -17,6 +17,21 @@ import type { User } from "@/types/database";
 
 type VerifyStep = "phone" | "otp";
 
+// --- Mock OTP Flow ----------------------------------------------------
+// We accept any 10-digit phone and any 6-digit code. Under the hood we
+// sign the user into Supabase with a deterministic email/password derived
+// from the phone so we get a real session for RLS + realtime to work.
+// Swap to `supabase.auth.signInWithOtp` (SMS) once Twilio is configured.
+const MOCK_OTP_FALLBACK = "123456";
+
+function phoneToEmail(phone: string): string {
+  return `${phone}@synora.mock`;
+}
+function phoneToPassword(phone: string): string {
+  // Deterministic so the same phone always yields the same credentials.
+  return `Synora!${phone}#mvp`;
+}
+
 export default function VerifyScreen() {
   const router = useRouter();
   const { setSession, setUser } = useAuthStore();
@@ -25,68 +40,70 @@ export default function VerifyScreen() {
   const [otp, setOtp] = useState("");
   const [loading, setLoading] = useState(false);
 
-  const phoneE164 = `+91${phone}`;
-
   const handleSendCode = async () => {
     const normalized = phone.replace(/\D/g, "");
     if (normalized.length !== 10) {
       Alert.alert("Invalid phone", "Please enter a valid 10-digit number.");
       return;
     }
-
-    try {
-      setLoading(true);
-      const { error } = await supabase.auth.signInWithOtp({
-        phone: `+91${normalized}`,
-      });
-
-      if (error) {
-        throw error;
-      }
-
-      setPhone(normalized);
-      setStep("otp");
-    } catch (error) {
-      const message =
-        error instanceof Error ? error.message : "Unable to send verification code.";
-      Alert.alert("Failed to send code", message);
-    } finally {
-      setLoading(false);
-    }
+    setPhone(normalized);
+    setStep("otp");
+    // Show hint so the user knows mock code
+    setTimeout(() => {
+      Alert.alert(
+        "Demo mode",
+        `OTP sent to +91 ${normalized}. Use code ${MOCK_OTP_FALLBACK} to continue.`,
+      );
+    }, 150);
   };
 
   const handleVerifyOtp = async () => {
-    if (otp.trim().length !== 6) {
+    const trimmed = otp.trim();
+    if (trimmed.length !== 6) {
       Alert.alert("Invalid code", "Please enter the 6-digit OTP.");
       return;
     }
 
     try {
       setLoading(true);
-      const { data, error } = await supabase.auth.verifyOtp({
-        phone: phoneE164,
-        token: otp.trim(),
-        type: "sms",
-      });
 
-      if (error) {
-        throw error;
+      const email = phoneToEmail(phone);
+      const password = phoneToPassword(phone);
+
+      // Try sign in; if user doesn't exist, sign up.
+      let signInRes = await supabase.auth.signInWithPassword({ email, password });
+
+      if (signInRes.error || !signInRes.data.session) {
+        const signUpRes = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: { phone: `+91${phone}` },
+          },
+        });
+        if (signUpRes.error) {
+          throw signUpRes.error;
+        }
+        // If email confirmation is enforced, there's no session yet — try sign-in again.
+        if (!signUpRes.data.session) {
+          const retry = await supabase.auth.signInWithPassword({ email, password });
+          if (retry.error || !retry.data.session) {
+            throw new Error(
+              "Could not establish a session. Disable email confirmations in Supabase → Auth → Providers.",
+            );
+          }
+          signInRes = retry;
+        } else {
+          signInRes = { data: signUpRes.data, error: null } as typeof signInRes;
+        }
       }
 
-      if (data.session) {
-        setSession(data.session);
-      }
+      const session = signInRes.data.session!;
+      const authUserId = session.user.id;
+      setSession(session);
 
-      const authUserId = data.user?.id;
-      if (!authUserId) {
-        throw new Error("Auth session could not be established.");
-      }
-
-      const {
-        data: existingUser,
-        error: userLookupError,
-        status,
-      } = await supabase
+      // Look up existing user profile
+      const { data: existingUser, error: userLookupError, status } = await supabase
         .from("users")
         .select("*")
         .eq("auth_id", authUserId)
@@ -98,7 +115,7 @@ export default function VerifyScreen() {
 
       if (existingUser) {
         setUser(existingUser);
-        router.replace("/(tabs)");
+        router.replace("/(tabs)/discover");
         return;
       }
 
@@ -114,12 +131,31 @@ export default function VerifyScreen() {
 
   return (
     <View style={styles.container}>
-      <Pressable style={styles.backButton} onPress={() => router.back()}>
+      <Pressable
+        style={styles.backButton}
+        onPress={() => {
+          if (step === "otp") {
+            setStep("phone");
+            setOtp("");
+          } else {
+            router.back();
+          }
+        }}
+        testID="verify-back-btn"
+      >
         <Text style={styles.backIcon}>{"<"}</Text>
       </Pressable>
 
       <View style={styles.content}>
-        <Text style={styles.title}>Verify your phone</Text>
+        <Text style={styles.kicker}>{step === "phone" ? "STEP 2 OF 5" : "STEP 2 OF 5 · OTP"}</Text>
+        <Text style={styles.title}>
+          {step === "phone" ? "Verify your phone." : "Enter the code."}
+        </Text>
+        <Text style={styles.subtitle}>
+          {step === "phone"
+            ? "We'll send a one-time code to confirm it's you."
+            : `Demo code: ${MOCK_OTP_FALLBACK} — sent to +91 ${phone}`}
+        </Text>
 
         {step === "phone" ? (
           <View style={styles.inputWrap}>
@@ -133,6 +169,7 @@ export default function VerifyScreen() {
               placeholder="10-digit phone number"
               placeholderTextColor={Colors.smoke}
               style={styles.phoneInput}
+              testID="verify-phone-input"
             />
           </View>
         ) : (
@@ -143,6 +180,7 @@ export default function VerifyScreen() {
             placeholder="123456"
             placeholderTextColor={Colors.smoke}
             style={styles.otpInput}
+            testID="verify-otp-input"
           />
         )}
       </View>
@@ -150,9 +188,10 @@ export default function VerifyScreen() {
       <Pressable
         onPress={step === "phone" ? handleSendCode : handleVerifyOtp}
         disabled={loading}
+        testID="verify-continue-btn"
       >
         <LinearGradient
-          colors={Gradients.primaryCta}
+          colors={Gradients.primaryCta as unknown as readonly [string, string, ...string[]]}
           start={{ x: 0, y: 0 }}
           end={{ x: 1, y: 1 }}
           style={[styles.button, loading && styles.buttonDisabled]}
@@ -183,26 +222,18 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  backIcon: {
-    color: Colors.cream,
-    fontSize: 20,
-    marginTop: -2,
-  },
-  content: {
-    flex: 1,
-    marginTop: Space.xl,
-  },
+  backIcon: { color: Colors.cream, fontSize: 20, marginTop: -2 },
+  content: { flex: 1, marginTop: Space.xl, gap: Space.sm },
+  kicker: { color: Colors.haze, fontSize: 10, letterSpacing: 3, fontWeight: "600" },
   title: {
     color: Colors.cream,
     fontFamily: "serif",
-    fontSize: 32,
+    fontSize: 34,
     fontWeight: "300",
-    marginBottom: Space.lg,
+    marginBottom: Space.xs,
   },
-  inputWrap: {
-    flexDirection: "row",
-    gap: Space.sm,
-  },
+  subtitle: { color: Colors.fog, fontSize: 14, lineHeight: 21, marginBottom: Space.lg },
+  inputWrap: { flexDirection: "row", gap: Space.sm },
   prefixBox: {
     width: 72,
     height: 58,
@@ -213,11 +244,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  prefixText: {
-    color: Colors.cream,
-    fontSize: 18,
-    fontWeight: "600",
-  },
+  prefixText: { color: Colors.cream, fontSize: 18, fontWeight: "600" },
   phoneInput: {
     flex: 1,
     height: 58,
@@ -247,12 +274,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  buttonDisabled: {
-    opacity: 0.7,
-  },
-  buttonText: {
-    color: Colors.cream,
-    fontSize: 16,
-    fontWeight: "600",
-  },
+  buttonDisabled: { opacity: 0.7 },
+  buttonText: { color: Colors.cream, fontSize: 16, fontWeight: "600" },
 });

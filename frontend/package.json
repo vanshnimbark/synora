@@ -1,0 +1,8 @@
+{
+  "name": "synora-frontend-wrapper",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "start": "cd /app && npx expo start --web --port 3000 --host lan"
+  }
+}

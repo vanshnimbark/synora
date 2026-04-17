@@ -1,8 +1,15 @@
 import { useState } from "react";
-import { Alert, Pressable, StyleSheet, Text, View } from "react-native";
+import {
+  ActivityIndicator,
+  Alert,
+  Modal,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
-import Constants from "expo-constants";
 
 import { OnboardingProgress } from "@/components/OnboardingProgress";
 import { Colors, Gradients, Radius, Space } from "@/constants/theme";
@@ -11,9 +18,6 @@ import { useAuthStore } from "@/store/authStore";
 import { useOnboardingStore } from "@/store/onboardingStore";
 import type { Database, User } from "@/types/database";
 
-const RAZORPAY_AMOUNT_PAISE = 49900;
-const isExpoGo = Constants.executionEnvironment === "storeClient";
-
 export default function PaywallScreen() {
   const router = useRouter();
   const session = useAuthStore((state) => state.session);
@@ -21,10 +25,11 @@ export default function PaywallScreen() {
   const clearOnboarding = useOnboardingStore((state) => state.clearOnboarding);
   const onboarding = useOnboardingStore((state) => state);
   const [loading, setLoading] = useState(false);
+  const [processingMock, setProcessingMock] = useState(false);
 
   const isFemale = onboarding.gender === "woman";
 
-  const upsertUser = async (subscriptionStatus: "free" | "active") => {
+  const upsertUser = async (subscriptionStatus: "free" | "active"): Promise<User> => {
     const authId = session?.user.id;
     if (!authId) {
       throw new Error("No active auth session.");
@@ -56,13 +61,17 @@ export default function PaywallScreen() {
       intent: onboarding.intent,
       city: null,
       college: null,
-      is_approved: false,
-      is_founder_approved: false,
+      // Auto-approve for MVP demo
+      is_approved: true,
+      is_founder_approved: true,
       is_banned: false,
       is_invisible: false,
       is_paid: subscriptionStatus === "active",
       subscription_status: subscriptionStatus,
-      payment_expires_at: null,
+      payment_expires_at:
+        subscriptionStatus === "active"
+          ? new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString()
+          : null,
       current_zone: "nearby",
       current_venue_id: null,
       expo_push_token: null,
@@ -82,6 +91,7 @@ export default function PaywallScreen() {
     }
 
     setUser(data);
+    return data;
   };
 
   const handleEnterFree = async () => {
@@ -89,7 +99,7 @@ export default function PaywallScreen() {
       setLoading(true);
       await upsertUser("free");
       clearOnboarding();
-      router.replace("/(auth)/pending");
+      router.replace("/(tabs)/discover");
     } catch (error) {
       const message = error instanceof Error ? error.message : "Failed to save your account.";
       Alert.alert("Could not continue", message);
@@ -98,42 +108,18 @@ export default function PaywallScreen() {
     }
   };
 
-  const handleSubscribe = async () => {
-    const key = process.env.EXPO_PUBLIC_RAZORPAY_KEY_ID;
-    if (!key) {
-      Alert.alert("Missing payment key", "Set EXPO_PUBLIC_RAZORPAY_KEY_ID in your env.");
-      return;
-    }
-    if (isExpoGo) {
-      Alert.alert(
-        "Unsupported in Expo Go",
-        "Razorpay requires a development build. Use `npx expo run:ios` / EAS dev client to test payments.",
-      );
-      return;
-    }
-
+  const handleMockSubscribe = async () => {
     try {
       setLoading(true);
-      const prefillName = onboarding.fullName || "Synora User";
-      const prefillContact = session?.user.phone ?? "";
-      const razorpayModule = await import("react-native-razorpay");
-      const razorpayCheckout = razorpayModule.default;
-      await razorpayCheckout.open({
-        key,
-        amount: RAZORPAY_AMOUNT_PAISE,
-        name: "Synora",
-        description: "Synora monthly subscription",
-        currency: "INR",
-        prefill: {
-          name: prefillName,
-          contact: prefillContact,
-        },
-      });
-
+      setProcessingMock(true);
+      // Simulate a Razorpay checkout round-trip
+      await new Promise((resolve) => setTimeout(resolve, 1800));
       await upsertUser("active");
       clearOnboarding();
-      router.replace("/(auth)/pending");
+      setProcessingMock(false);
+      router.replace("/(tabs)/discover");
     } catch (error) {
+      setProcessingMock(false);
       const message =
         error instanceof Error ? error.message : "Payment failed. Please try again.";
       Alert.alert("Subscription failed", message);
@@ -145,38 +131,87 @@ export default function PaywallScreen() {
   return (
     <View style={styles.container}>
       <OnboardingProgress currentStep={5} />
-      <Pressable style={styles.backButton} onPress={() => router.back()}>
+      <Pressable
+        style={styles.backButton}
+        onPress={() => router.back()}
+        testID="paywall-back-btn"
+      >
         <Text style={styles.backIcon}>{"<"}</Text>
       </Pressable>
 
       {isFemale ? (
         <View style={styles.content}>
-          <Text style={styles.title}>Synora is free for women.</Text>
-          <Text style={styles.subtitle}>We believe in building a balanced ecosystem.</Text>
-          <Pressable onPress={() => void handleEnterFree()} disabled={loading}>
-            <LinearGradient colors={Gradients.primaryCta} style={[styles.button, loading && styles.buttonDisabled]}>
-              <Text style={styles.buttonText}>{loading ? "Please wait..." : "Enter Synora →"}</Text>
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>✦ FREE FOR WOMEN</Text>
+          </View>
+          <Text style={styles.title}>Synora is free for you.</Text>
+          <Text style={styles.subtitle}>
+            We believe in building a balanced ecosystem. Your access is on us.
+          </Text>
+          <View style={styles.features}>
+            <Text style={styles.featureItem}>◈  Full discovery access</Text>
+            <Text style={styles.featureItem}>◎  Venue mode unlocked</Text>
+            <Text style={styles.featureItem}>✦  Crossed paths reveals</Text>
+          </View>
+          <Pressable
+            onPress={() => void handleEnterFree()}
+            disabled={loading}
+            testID="paywall-enter-free-btn"
+          >
+            <LinearGradient
+              colors={Gradients.primaryCta as unknown as readonly [string, string, ...string[]]}
+              style={[styles.button, loading && styles.buttonDisabled]}
+            >
+              <Text style={styles.buttonText}>
+                {loading ? "Setting up your profile..." : "Enter Synora →"}
+              </Text>
             </LinearGradient>
           </Pressable>
         </View>
       ) : (
         <View style={styles.content}>
-          <Text style={styles.title}>₹499/month</Text>
-          <Text style={styles.subtitle}>Unlock full access to Synora.</Text>
-          <View style={styles.features}>
-            <Text style={styles.featureItem}>• Full access</Text>
-            <Text style={styles.featureItem}>• Venue mode</Text>
-            <Text style={styles.featureItem}>• Crossed paths</Text>
+          <View style={styles.badge}>
+            <Text style={styles.badgeText}>◆ MEMBERSHIP</Text>
           </View>
-          <Pressable onPress={() => void handleSubscribe()} disabled={loading}>
-            <LinearGradient colors={Gradients.primaryCta} style={[styles.button, loading && styles.buttonDisabled]}>
+          <Text style={styles.title}>₹499 / month</Text>
+          <Text style={styles.subtitle}>
+            Serious intent means serious access. Unlock Synora in full.
+          </Text>
+          <View style={styles.features}>
+            <Text style={styles.featureItem}>◈  Full discovery access</Text>
+            <Text style={styles.featureItem}>◎  Venue mode · real-world matches</Text>
+            <Text style={styles.featureItem}>✦  Crossed paths with blurred reveal</Text>
+            <Text style={styles.featureItem}>💬  Unlimited comments & chats</Text>
+          </View>
+          <Pressable
+            onPress={() => void handleMockSubscribe()}
+            disabled={loading}
+            testID="paywall-subscribe-btn"
+          >
+            <LinearGradient
+              colors={Gradients.primaryCta as unknown as readonly [string, string, ...string[]]}
+              style={[styles.button, loading && styles.buttonDisabled]}
+            >
               <Text style={styles.buttonText}>
-                {loading ? "Processing..." : "Subscribe ₹499/month"}
+                {loading ? "Processing..." : "Subscribe ₹499 / month"}
               </Text>
             </LinearGradient>
           </Pressable>
+          <Text style={styles.fineprint}>
+            Demo build · Razorpay is MOCKED. No real charge.
+          </Text>
         </View>
       )}
+
+      <Modal visible={processingMock} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <ActivityIndicator color={Colors.ember} size="large" />
+            <Text style={styles.modalTitle}>Processing payment…</Text>
+            <Text style={styles.modalSub}>Razorpay (mock) · ₹499 · INR</Text>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -199,51 +234,69 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  backIcon: {
-    color: Colors.cream,
-    fontSize: 20,
-    marginTop: -2,
+  backIcon: { color: Colors.cream, fontSize: 20, marginTop: -2 },
+  content: { flex: 1, justifyContent: "center", gap: Space.md },
+  badge: {
+    alignSelf: "flex-start",
+    borderWidth: 1,
+    borderColor: Colors.mist,
+    backgroundColor: Colors.dusk,
+    borderRadius: Radius.pill,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
-  content: {
-    flex: 1,
-    justifyContent: "center",
-    gap: Space.md,
-  },
+  badgeText: { color: Colors.haze, fontSize: 10, letterSpacing: 2, fontWeight: "700" },
   title: {
     color: Colors.cream,
     fontFamily: "serif",
-    fontSize: 32,
+    fontSize: 40,
     fontWeight: "300",
   },
-  subtitle: {
-    color: Colors.fog,
-    fontSize: 15,
-    lineHeight: 22,
-  },
+  subtitle: { color: Colors.fog, fontSize: 15, lineHeight: 22 },
   features: {
     borderWidth: 1,
     borderColor: Colors.mist,
     borderRadius: Radius.md,
     padding: Space.md,
     backgroundColor: Colors.obsidian,
-    gap: Space.xs,
+    gap: Space.sm,
   },
-  featureItem: {
-    color: Colors.cream,
-    fontSize: 14,
-  },
+  featureItem: { color: Colors.cream, fontSize: 14, lineHeight: 20 },
   button: {
     height: 56,
     borderRadius: Radius.md,
     alignItems: "center",
     justifyContent: "center",
   },
-  buttonDisabled: {
-    opacity: 0.7,
+  buttonDisabled: { opacity: 0.7 },
+  buttonText: { color: Colors.cream, fontSize: 16, fontWeight: "600" },
+  fineprint: {
+    color: Colors.smoke,
+    fontSize: 11,
+    textAlign: "center",
   },
-  buttonText: {
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(8,6,15,0.78)",
+    alignItems: "center",
+    justifyContent: "center",
+    padding: Space.lg,
+  },
+  modalCard: {
+    backgroundColor: Colors.obsidian,
+    borderWidth: 1,
+    borderColor: Colors.mist,
+    borderRadius: Radius.md,
+    padding: Space.lg,
+    alignItems: "center",
+    gap: Space.sm,
+    minWidth: 260,
+  },
+  modalTitle: {
     color: Colors.cream,
     fontSize: 16,
     fontWeight: "600",
+    marginTop: Space.sm,
   },
+  modalSub: { color: Colors.fog, fontSize: 12 },
 });

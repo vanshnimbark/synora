@@ -175,6 +175,20 @@ export function useVenueMode(venueId: string | null): UseVenueModeResult {
         }
 
         const now = new Date().toISOString();
+
+        // Deactivate any existing active presence for this user+venue first
+        await supabase
+          .from("venue_presence")
+          .update({
+            is_active: false,
+            exited_at: now,
+            left_at: now,
+            status: "out",
+          } as never)
+          .eq("user_id", currentUser.id)
+          .eq("venue_id", venue.id)
+          .eq("is_active", true);
+
         const payload: Omit<VenuePresence, "id" | "created_at" | "updated_at"> = {
           venue_id: venue.id,
           user_id: currentUser.id,

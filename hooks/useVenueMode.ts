@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Alert, Linking } from "react-native";
+import { Platform } from "react-native";
 
-import { getCurrentPosition, haversineDistance, requestLocationPermission } from "@/lib/venueDetection";
+import {
+  getCurrentPosition,
+  haversineDistance,
+  requestLocationPermission,
+} from "@/lib/venueDetection";
 import { supabase } from "../lib/supabase";
 import { useAuthStore } from "@/store/authStore";
 import type { User, Venue, VenuePresence } from "@/types/database";
@@ -10,12 +14,13 @@ interface NearbyUser extends User {
   presenceEnteredAt: string;
 }
 
-interface UseVenueModeResult {
+export interface UseVenueModeResult {
   isActive: boolean;
   nearbyUsers: NearbyUser[];
   timeRemaining: number;
   loading: boolean;
-  activate: (venue: Venue) => Promise<void>;
+  error: string | null;
+  activate: (venue: Venue, opts?: { bypassGps?: boolean }) => Promise<void>;
   deactivate: () => Promise<void>;
   refetchNearbyUsers: () => Promise<void>;
 }
@@ -28,6 +33,7 @@ export function useVenueMode(venueId: string | null): UseVenueModeResult {
   const [nearbyUsers, setNearbyUsers] = useState<NearbyUser[]>([]);
   const [timeRemaining, setTimeRemaining] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const countdownIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoDeactivateTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -42,86 +48,16 @@ export function useVenueMode(venueId: string | null): UseVenueModeResult {
     }
   }, []);
 
-  const startCountdown = useCallback(
-    (enteredAtIso: string) => {
-      clearTimers();
-      const enteredAtMs = new Date(enteredAtIso).getTime();
-      const expiryMs = enteredAtMs + FOUR_HOURS_SECONDS * 1000;
-
-      const tick = () => {
-        const nowMs = Date.now();
-        const remainingSeconds = Math.max(0, Math.floor((expiryMs - nowMs) / 1000));
-        setTimeRemaining(remainingSeconds);
-      };
-
-      tick();
-      countdownIntervalRef.current = setInterval(tick, 1000);
-
-      const timeoutMs = Math.max(0, expiryMs - Date.now());
-      autoDeactivateTimeoutRef.current = setTimeout(() => {
-        void deactivateInternal();
-      }, timeoutMs);
-    },
-    [clearTimers],
-  );
-
-  const refetchNearbyUsers = useCallback(async () => {
-    if (!venueId || !currentUser?.id) {
-      setNearbyUsers([]);
-      return;
-    }
-
-    const { data: presenceRows, error: presenceError } = await supabase
-      .from("venue_presence")
-      .select("user_id,entered_at")
-      .eq("venue_id", venueId)
-      .eq("is_active", true)
-      .neq("user_id", currentUser.id);
-
-    if (presenceError || !presenceRows?.length) {
-      setNearbyUsers([]);
-      return;
-    }
-
-    const activePresenceRows = (presenceRows ?? []) as Array<{
-      user_id: string;
-      entered_at: string;
-    }>;
-    const userIds = activePresenceRows.map((row) => row.user_id);
-    const { data: usersRows, error: usersError } = await supabase
-      .from("users")
-      .select("*")
-      .in("id", userIds);
-
-    if (usersError || !usersRows) {
-      setNearbyUsers([]);
-      return;
-    }
-
-    const typedUsersRows = (usersRows ?? []) as User[];
-    const enteredAtMap = new Map(activePresenceRows.map((row) => [row.user_id, row.entered_at]));
-    const merged = typedUsersRows.map((user) => ({
-      ...user,
-      presenceEnteredAt: enteredAtMap.get(user.id) ?? new Date().toISOString(),
-    }));
-    setNearbyUsers(merged);
-  }, [currentUser?.id, venueId]);
-
   const deactivateInternal = useCallback(async () => {
-    if (!venueId || !currentUser?.id) {
-      return;
-    }
-
+    if (!venueId || !currentUser?.id) return;
     await supabase
       .from("venue_presence")
-      .update(
-        {
-          is_active: false,
-          exited_at: new Date().toISOString(),
-          left_at: new Date().toISOString(),
-          status: "out",
-        } as never,
-      )
+      .update({
+        is_active: false,
+        exited_at: new Date().toISOString(),
+        left_at: new Date().toISOString(),
+        status: "out",
+      } as never)
       .eq("user_id", currentUser.id)
       .eq("venue_id", venueId)
       .eq("is_active", true);
@@ -129,51 +65,113 @@ export function useVenueMode(venueId: string | null): UseVenueModeResult {
     clearTimers();
     setIsActive(false);
     setTimeRemaining(0);
-    await refetchNearbyUsers();
-  }, [clearTimers, currentUser?.id, refetchNearbyUsers, venueId]);
+  }, [clearTimers, currentUser?.id, venueId]);
+
+  const startCountdown = useCallback(
+    (enteredAtIso: string) => {
+      clearTimers();
+      const enteredAtMs = new Date(enteredAtIso).getTime();
+      const expiryMs = enteredAtMs + FOUR_HOURS_SECONDS * 1000;
+      const tick = () => {
+        const remaining = Math.max(0, Math.floor((expiryMs - Date.now()) / 1000));
+        setTimeRemaining(remaining);
+      };
+      tick();
+      countdownIntervalRef.current = setInterval(tick, 1000);
+      const timeoutMs = Math.max(0, expiryMs - Date.now());
+      autoDeactivateTimeoutRef.current = setTimeout(() => {
+        void deactivateInternal();
+      }, timeoutMs);
+    },
+    [clearTimers, deactivateInternal],
+  );
+
+  const refetchNearbyUsers = useCallback(async () => {
+    if (!venueId || !currentUser?.id) {
+      setNearbyUsers([]);
+      return;
+    }
+    const { data: presenceRows } = await supabase
+      .from("venue_presence")
+      .select("user_id,entered_at")
+      .eq("venue_id", venueId)
+      .eq("is_active", true)
+      .neq("user_id", currentUser.id);
+    if (!presenceRows?.length) {
+      setNearbyUsers([]);
+      return;
+    }
+    const activePresenceRows = presenceRows as Array<{
+      user_id: string;
+      entered_at: string;
+    }>;
+    const userIds = activePresenceRows.map((r) => r.user_id);
+    const { data: usersRows } = await supabase
+      .from("users")
+      .select("*")
+      .in("id", userIds)
+      .eq("is_approved", true)
+      .eq("is_banned", false)
+      .eq("is_invisible", false);
+    if (!usersRows) {
+      setNearbyUsers([]);
+      return;
+    }
+    const typed = usersRows as User[];
+    const enteredAtMap = new Map(
+      activePresenceRows.map((r) => [r.user_id, r.entered_at]),
+    );
+    setNearbyUsers(
+      typed.map((u) => ({
+        ...u,
+        presenceEnteredAt: enteredAtMap.get(u.id) ?? new Date().toISOString(),
+      })),
+    );
+  }, [currentUser?.id, venueId]);
 
   const deactivate = useCallback(async () => {
     setLoading(true);
     try {
       await deactivateInternal();
+      await refetchNearbyUsers();
     } finally {
       setLoading(false);
     }
-  }, [deactivateInternal]);
+  }, [deactivateInternal, refetchNearbyUsers]);
 
   const activate = useCallback(
-    async (venue: Venue) => {
+    async (venue: Venue, opts?: { bypassGps?: boolean }) => {
       if (!currentUser?.id) {
-        Alert.alert("Not signed in", "Please sign in again.");
+        setError("Please sign in again.");
         return;
       }
-
       setLoading(true);
+      setError(null);
       try {
-        const granted = await requestLocationPermission();
-        if (!granted) {
-          Alert.alert(
-            "Location permission required",
-            "Please enable location access from Settings to activate Venue Mode.",
-            [
-              { text: "Cancel", style: "cancel" },
-              { text: "Open Settings", onPress: () => void Linking.openSettings() },
-            ],
+        // GPS check — on web demo, we bypass by default so the flow is testable.
+        // On native, the user must be within the venue's geofence_radius_meters.
+        const isWeb = Platform.OS === "web";
+        const skipGps = opts?.bypassGps ?? isWeb;
+
+        if (!skipGps) {
+          const granted = await requestLocationPermission();
+          if (!granted) {
+            throw new Error(
+              "Location permission is required to activate Venue Mode.",
+            );
+          }
+          const pos = await getCurrentPosition();
+          const dist = haversineDistance(
+            pos.latitude,
+            pos.longitude,
+            venue.latitude,
+            venue.longitude,
           );
-          return;
-        }
-
-        const position = await getCurrentPosition();
-        const distance = haversineDistance(
-          position.latitude,
-          position.longitude,
-          venue.latitude,
-          venue.longitude,
-        );
-
-        if (distance > venue.geofence_radius_meters) {
-          Alert.alert("You don't seem to be at this venue yet");
-          return;
+          if (dist > venue.geofence_radius_meters) {
+            throw new Error(
+              `You must be within ${venue.geofence_radius_meters}m of ${venue.name} to activate.`,
+            );
+          }
         }
 
         const now = new Date().toISOString();
@@ -186,18 +184,18 @@ export function useVenueMode(venueId: string | null): UseVenueModeResult {
           exited_at: null,
           left_at: null,
         };
-
-        const { error } = await supabase.from("venue_presence").insert(payload as never);
-        if (error) {
-          throw error;
-        }
+        const { error: insertError } = await supabase
+          .from("venue_presence")
+          .insert(payload as never);
+        if (insertError) throw insertError;
 
         setIsActive(true);
         startCountdown(now);
         await refetchNearbyUsers();
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Could not activate Venue Mode.";
-        Alert.alert("Activation failed", message);
+      } catch (e) {
+        const message =
+          e instanceof Error ? e.message : "Could not activate Venue Mode.";
+        setError(message);
       } finally {
         setLoading(false);
       }
@@ -215,8 +213,7 @@ export function useVenueMode(venueId: string | null): UseVenueModeResult {
     }
 
     let mounted = true;
-
-    const loadCurrentState = async () => {
+    const loadCurrent = async () => {
       const { data } = await supabase
         .from("venue_presence")
         .select("*")
@@ -226,11 +223,7 @@ export function useVenueMode(venueId: string | null): UseVenueModeResult {
         .order("entered_at", { ascending: false })
         .limit(1)
         .maybeSingle<VenuePresence>();
-
-      if (!mounted) {
-        return;
-      }
-
+      if (!mounted) return;
       if (data) {
         setIsActive(true);
         startCountdown(data.entered_at);
@@ -238,11 +231,9 @@ export function useVenueMode(venueId: string | null): UseVenueModeResult {
         setIsActive(false);
         setTimeRemaining(0);
       }
-
       await refetchNearbyUsers();
     };
-
-    void loadCurrentState();
+    void loadCurrent();
 
     const channel = supabase
       .channel(`venue-presence-${venueId}`)
@@ -252,11 +243,9 @@ export function useVenueMode(venueId: string | null): UseVenueModeResult {
           event: "*",
           schema: "public",
           table: "venue_presence",
-          filter: `venue_id=eq.${venueId},is_active=eq.true`,
+          filter: `venue_id=eq.${venueId}`,
         },
-        () => {
-          void refetchNearbyUsers();
-        },
+        () => void refetchNearbyUsers(),
       )
       .subscribe();
 
@@ -273,10 +262,11 @@ export function useVenueMode(venueId: string | null): UseVenueModeResult {
       nearbyUsers,
       timeRemaining,
       loading,
+      error,
       activate,
       deactivate,
       refetchNearbyUsers,
     }),
-    [activate, deactivate, isActive, loading, nearbyUsers, refetchNearbyUsers, timeRemaining],
+    [activate, deactivate, error, isActive, loading, nearbyUsers, refetchNearbyUsers, timeRemaining],
   );
 }

@@ -1,4 +1,4 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Image, Pressable, StyleSheet, Text, View } from "react-native";
 import { useRouter } from "expo-router";
 import { LinearGradient } from "expo-linear-gradient";
 
@@ -14,14 +14,23 @@ export default function AuthIndexScreen() {
       <View style={[styles.orb, styles.orbThree]} />
 
       <View style={styles.brandWrap}>
-        <Text style={styles.brand}>Synora</Text>
+        <View style={styles.logoCard}>
+          <Image
+            source={require("../../assets/synora-logo.png")}
+            style={styles.logoImage}
+            resizeMode="cover"
+          />
+        </View>
         <Text style={styles.tagline}>CONTEXT-AWARE DATING</Text>
+        <Text style={styles.sub}>
+          Meet in real places, not on a swipe feed.
+        </Text>
       </View>
 
       <View style={styles.actions}>
-        <Pressable onPress={() => router.push("/(auth)/invite")}>
+        <Pressable onPress={() => router.push("/(auth)/invite")} testID="landing-invite-btn">
           <LinearGradient
-            colors={Gradients.primaryCta}
+            colors={Gradients.primaryCta as unknown as readonly [string, string, ...string[]]}
             start={{ x: 0, y: 0 }}
             end={{ x: 1, y: 1 }}
             style={styles.primaryButton}
@@ -30,9 +39,16 @@ export default function AuthIndexScreen() {
           </LinearGradient>
         </Pressable>
 
-        <Pressable style={styles.secondaryButton}>
+        <Pressable
+          style={styles.secondaryButton}
+          testID="landing-request-btn"
+          onPress={() => router.push("/(auth)/invite")}
+        >
           <Text style={styles.secondaryButtonText}>Request Access</Text>
         </Pressable>
+        <Text style={styles.fineprint}>
+          By continuing you agree to our Terms · Privacy
+        </Text>
       </View>
     </View>
   );
@@ -47,66 +63,69 @@ const styles = StyleSheet.create({
     paddingBottom: Space.lg,
     justifyContent: "space-between",
   },
-  orb: {
-    position: "absolute",
-    borderRadius: Radius.pill,
-  },
+  orb: { position: "absolute", borderRadius: Radius.pill },
   orbOne: {
-    width: 170,
-    height: 170,
-    backgroundColor: Colors.haze,
-    opacity: 0.16,
-    top: 90,
-    left: -30,
-  },
-  orbTwo: {
     width: 220,
     height: 220,
+    backgroundColor: Colors.haze,
+    opacity: 0.18,
+    top: 80,
+    left: -60,
+  },
+  orbTwo: {
+    width: 260,
+    height: 260,
     backgroundColor: Colors.bloom,
-    opacity: 0.12,
-    top: 210,
-    right: -80,
+    opacity: 0.16,
+    top: 160,
+    right: -90,
   },
   orbThree: {
-    width: 150,
-    height: 150,
+    width: 200,
+    height: 200,
     backgroundColor: Colors.ember,
-    opacity: 0.1,
-    bottom: 180,
-    left: 30,
+    opacity: 0.12,
+    bottom: 140,
+    left: 10,
   },
   brandWrap: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
+    gap: 18,
   },
-  brand: {
-    color: Colors.cream,
-    fontFamily: "serif",
-    fontSize: 48,
-    fontWeight: "300",
-    marginBottom: Space.sm,
+  logoCard: {
+    width: 160,
+    height: 160,
+    borderRadius: 40,
+    overflow: "hidden",
+    shadowColor: "#C23B8A",
+    shadowOpacity: 0.45,
+    shadowRadius: 40,
+    shadowOffset: { width: 0, height: 10 },
   },
+  logoImage: { width: "100%", height: "100%" },
   tagline: {
+    color: Colors.cream,
+    fontSize: 11,
+    letterSpacing: 5,
+    fontWeight: "600",
+  },
+  sub: {
     color: Colors.fog,
-    fontSize: 10,
-    letterSpacing: 4,
-    fontWeight: "500",
+    fontSize: 14,
+    textAlign: "center",
+    paddingHorizontal: 30,
+    lineHeight: 20,
   },
-  actions: {
-    gap: Space.md,
-  },
+  actions: { gap: Space.md },
   primaryButton: {
     height: 56,
     borderRadius: Radius.md,
     alignItems: "center",
     justifyContent: "center",
   },
-  primaryButtonText: {
-    color: Colors.cream,
-    fontSize: 16,
-    fontWeight: "600",
-  },
+  primaryButtonText: { color: Colors.cream, fontSize: 16, fontWeight: "700" },
   secondaryButton: {
     height: 56,
     borderRadius: Radius.md,
@@ -116,9 +135,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: "transparent",
   },
-  secondaryButtonText: {
-    color: Colors.fog,
-    fontSize: 15,
-    fontWeight: "500",
+  secondaryButtonText: { color: Colors.fog, fontSize: 15, fontWeight: "500" },
+  fineprint: {
+    color: Colors.smoke,
+    fontSize: 11,
+    textAlign: "center",
+    marginTop: 4,
   },
 });
